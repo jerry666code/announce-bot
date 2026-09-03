@@ -30,7 +30,12 @@ def has_role(member: discord.Member, role_id: int) -> bool:
 
 class AnnounceModal(discord.ui.Modal, title="Новое объявление"):
     заголовок = discord.ui.TextInput(label="Заголовок", max_length=256)
-    текст = discord.ui.TextInput(label="Текст", style=discord.TextStyle.paragraph, max_length=4000)
+    текст = discord.ui.TextInput(
+        label="Текст",
+        style=discord.TextStyle.paragraph,
+        max_length=4000,
+        placeholder="Часть текста можно скрыть спойлером: ||скрытый текст||",
+    )
 
     def __init__(self, channel, image, color):
         super().__init__()
