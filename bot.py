@@ -1,0 +1,91 @@
+import os
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
+GUILD_ID = int(os.environ["GUILD_ID"])
+ANNOUNCE_ROLE_ID = int(os.environ["ANNOUNCE_ROLE_ID"])
+
+GUILD_OBJECT = discord.Object(id=GUILD_ID)
+
+COLOR_CHOICES = {
+    "Синий": discord.Color.blurple(),
+    "Зелёный": discord.Color.green(),
+    "Красный": discord.Color.red(),
+    "Жёлтый": discord.Color.gold(),
+    "Фиолетовый": discord.Color.purple(),
+}
+
+intents = discord.Intents.default()
+
+
+def has_role(member: discord.Member, role_id: int) -> bool:
+    return any(role.id == role_id for role in member.roles)
+
+
+class AnnounceModal(discord.ui.Modal, title="Новое объявление"):
+    заголовок = discord.ui.TextInput(label="Заголовок", max_length=256)
+    текст = discord.ui.TextInput(label="Текст", style=discord.TextStyle.paragraph, max_length=4000)
+
+    def __init__(self, channel, image, color):
+        super().__init__()
+        self.channel = channel
+        self.image = image
+        self.color = color
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        embed = discord.Embed(title=str(self.заголовок), description=str(self.текст), color=self.color)
+
+        if self.image is not None:
+            file = await self.image.to_file()
+            embed.set_image(url=f"attachment://{file.filename}")
+            await self.channel.send(embed=embed, file=file)
+        else:
+            await self.channel.send(embed=embed)
+
+        await interaction.followup.send("Объявление отправлено.", ephemeral=True)
+
+
+class AnnounceBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix=commands.when_mentioned, intents=intents, status=discord.Status.invisible)
+
+    async def setup_hook(self):
+        self.tree.copy_global_to(guild=GUILD_OBJECT)
+        await self.tree.sync(guild=GUILD_OBJECT)
+
+
+bot = AnnounceBot()
+
+
+@bot.tree.command(name="announce", description="Отправить оформленное объявление", guild=GUILD_OBJECT)
+@app_commands.describe(
+    канал="Куда отправить (по умолчанию — текущий канал)",
+    изображение="Картинка/баннер для объявления (необязательно)",
+    цвет="Цвет полоски слева (необязательно, по умолчанию синий)",
+)
+@app_commands.choices(цвет=[app_commands.Choice(name=k, value=k) for k in COLOR_CHOICES])
+async def announce(
+    interaction: discord.Interaction,
+    канал: discord.TextChannel = None,
+    изображение: discord.Attachment = None,
+    цвет: app_commands.Choice[str] = None,
+):
+    if not isinstance(interaction.user, discord.Member) or not has_role(interaction.user, ANNOUNCE_ROLE_ID):
+        await interaction.response.send_message("Эта команда доступна только администрации.", ephemeral=True)
+        return
+
+    target = канал or interaction.channel
+    color = COLOR_CHOICES[цвет.value] if цвет is not None else discord.Color.blurple()
+    await interaction.response.send_modal(AnnounceModal(target, изображение, color))
+
+
+if __name__ == "__main__":
+    bot.run(DISCORD_BOT_TOKEN)
