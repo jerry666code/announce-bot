@@ -53,6 +53,28 @@ class AnnounceModal(discord.ui.Modal, title="Новое объявление"):
         await interaction.followup.send("Объявление отправлено.", ephemeral=True)
 
 
+class RuleModal(discord.ui.Modal, title="Новый пункт правил"):
+    номер = discord.ui.TextInput(label="Номер пункта", placeholder="1.2", max_length=16)
+    описание = discord.ui.TextInput(label="Описание", style=discord.TextStyle.paragraph, max_length=1500)
+    наказание = discord.ui.TextInput(label="Наказание", placeholder="Тайм-аут / Бан", max_length=100)
+    длительность = discord.ui.TextInput(label="Длительность", placeholder="1 час / 6ч / 1д", max_length=100)
+
+    def __init__(self, channel):
+        super().__init__()
+        self.channel = channel
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        embed = discord.Embed(title=f"Пункт – {self.номер}", color=discord.Color.red())
+        embed.add_field(name="📋 Описание", value=str(self.описание), inline=False)
+        embed.add_field(name="⚠️ Наказание", value=str(self.наказание), inline=True)
+        embed.add_field(name="⏱️ Длительность", value=str(self.длительность), inline=True)
+
+        await self.channel.send(embed=embed)
+        await interaction.followup.send("Пункт правил отправлен.", ephemeral=True)
+
+
 class AnnounceBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=commands.when_mentioned, intents=intents, status=discord.Status.invisible)
@@ -85,6 +107,17 @@ async def announce(
     target = канал or interaction.channel
     color = COLOR_CHOICES[цвет.value] if цвет is not None else discord.Color.blurple()
     await interaction.response.send_modal(AnnounceModal(target, изображение, color))
+
+
+@bot.tree.command(name="rule", description="Отправить пункт правил", guild=GUILD_OBJECT)
+@app_commands.describe(канал="Куда отправить (по умолчанию — текущий канал)")
+async def rule(interaction: discord.Interaction, канал: discord.TextChannel = None):
+    if not isinstance(interaction.user, discord.Member) or not has_role(interaction.user, ANNOUNCE_ROLE_ID):
+        await interaction.response.send_message("Эта команда доступна только администрации.", ephemeral=True)
+        return
+
+    target = канал or interaction.channel
+    await interaction.response.send_modal(RuleModal(target))
 
 
 if __name__ == "__main__":
