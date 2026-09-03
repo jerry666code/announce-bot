@@ -37,16 +37,19 @@ class AnnounceModal(discord.ui.Modal, title="Новое объявление"):
         placeholder="Часть текста можно скрыть спойлером: ||скрытый текст||",
     )
 
-    def __init__(self, channel, image, color):
+    def __init__(self, channel, image, color, mention_everyone):
         super().__init__()
         self.channel = channel
         self.image = image
         self.color = color
+        self.mention_everyone = mention_everyone
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         embed = discord.Embed(title=str(self.заголовок), description=str(self.текст), color=self.color)
+        content = "@everyone" if self.mention_everyone else None
+        allowed_mentions = discord.AllowedMentions(everyone=self.mention_everyone)
 
         if self.image is not None:
             is_spoiler = self.image.is_spoiler()
@@ -54,12 +57,12 @@ class AnnounceModal(discord.ui.Modal, title="Новое объявление"):
             if is_spoiler:
                 # Картинка внутри эмбеда не может быть размыта — спойлеры
                 # работают только у обычных вложений, поэтому шлём отдельно.
-                await self.channel.send(embed=embed, file=file)
+                await self.channel.send(content=content, embed=embed, file=file, allowed_mentions=allowed_mentions)
             else:
                 embed.set_image(url=f"attachment://{file.filename}")
-                await self.channel.send(embed=embed, file=file)
+                await self.channel.send(content=content, embed=embed, file=file, allowed_mentions=allowed_mentions)
         else:
-            await self.channel.send(embed=embed)
+            await self.channel.send(content=content, embed=embed, allowed_mentions=allowed_mentions)
 
         await interaction.followup.send("Объявление отправлено.", ephemeral=True)
 
@@ -103,6 +106,7 @@ bot = AnnounceBot()
     канал="Куда отправить (по умолчанию — текущий канал)",
     изображение="Картинка/баннер для объявления (необязательно)",
     цвет="Цвет полоски слева (необязательно, по умолчанию синий)",
+    упомянуть_всех="Запинговать @everyone (по умолчанию выключено)",
 )
 @app_commands.choices(цвет=[app_commands.Choice(name=k, value=k) for k in COLOR_CHOICES])
 async def announce(
@@ -110,6 +114,7 @@ async def announce(
     канал: discord.TextChannel = None,
     изображение: discord.Attachment = None,
     цвет: app_commands.Choice[str] = None,
+    упомянуть_всех: bool = False,
 ):
     if not isinstance(interaction.user, discord.Member) or not has_role(interaction.user, ANNOUNCE_ROLE_ID):
         await interaction.response.send_message("Эта команда доступна только администрации.", ephemeral=True)
@@ -117,7 +122,7 @@ async def announce(
 
     target = канал or interaction.channel
     color = COLOR_CHOICES[цвет.value] if цвет is not None else discord.Color.blurple()
-    await interaction.response.send_modal(AnnounceModal(target, изображение, color))
+    await interaction.response.send_modal(AnnounceModal(target, изображение, color, упомянуть_всех))
 
 
 @bot.tree.command(name="rule", description="Отправить пункт правил", guild=GUILD_OBJECT)
