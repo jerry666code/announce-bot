@@ -48,7 +48,7 @@ class AnnounceModal(discord.ui.Modal, title="Новое объявление"):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         embed = discord.Embed(title=str(self.заголовок), description=str(self.текст), color=self.color)
-        content = "@everyone" if self.mention_everyone else None
+        content = "||@everyone||" if self.mention_everyone else None
         allowed_mentions = discord.AllowedMentions(everyone=self.mention_everyone)
 
         if self.image is not None:
