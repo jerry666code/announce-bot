@@ -44,9 +44,15 @@ class AnnounceModal(discord.ui.Modal, title="Новое объявление"):
         embed = discord.Embed(title=str(self.заголовок), description=str(self.текст), color=self.color)
 
         if self.image is not None:
-            file = await self.image.to_file()
-            embed.set_image(url=f"attachment://{file.filename}")
-            await self.channel.send(embed=embed, file=file)
+            is_spoiler = self.image.is_spoiler()
+            file = await self.image.to_file(spoiler=is_spoiler)
+            if is_spoiler:
+                # Картинка внутри эмбеда не может быть размыта — спойлеры
+                # работают только у обычных вложений, поэтому шлём отдельно.
+                await self.channel.send(embed=embed, file=file)
+            else:
+                embed.set_image(url=f"attachment://{file.filename}")
+                await self.channel.send(embed=embed, file=file)
         else:
             await self.channel.send(embed=embed)
 
