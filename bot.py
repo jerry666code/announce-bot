@@ -75,9 +75,37 @@ class AnnounceModal(discord.ui.Modal, title="Новое объявление"):
         await interaction.followup.send("Объявление отправлено.", ephemeral=True)
 
 
+RULES_EMBED_TITLE = "📋 Правила сервера"
+# Лимиты эмбеда Discord: не больше 25 полей и не больше 6000 символов суммарно
+# (заголовок + все name/value полей) — оставляем небольшой запас на заголовок.
+MAX_RULE_FIELDS = 25
+MAX_EMBED_CHARS = 5900
+
+
+def _rule_sort_key(номер: str):
+    """"1.2" -> (1, 2), чтобы пункты в своде шли по номеру, а не по порядку
+    добавления; нечисловые номера уходят в конец списка."""
+    parts = []
+    for piece in номер.split("."):
+        try:
+            parts.append(int(piece))
+        except ValueError:
+            return (float("inf"), номер)
+    return tuple(parts) if parts else (float("inf"), номер)
+
+
+async def find_rules_message(channel: discord.TextChannel, bot_user_id: int):
+    """Ищем уже отправленный свод правил в канале, чтобы дописывать пункты в
+    него, а не плодить новое сообщение на каждый /rule."""
+    async for msg in channel.history(limit=200):
+        if msg.author.id == bot_user_id and msg.embeds and msg.embeds[0].title == RULES_EMBED_TITLE:
+            return msg
+    return None
+
+
 class RuleModal(discord.ui.Modal, title="Новый пункт правил"):
     номер = discord.ui.TextInput(label="Номер пункта", placeholder="1.2", max_length=16)
-    описание = discord.ui.TextInput(label="Описание", style=discord.TextStyle.paragraph, max_length=1500)
+    описание = discord.ui.TextInput(label="Описание", style=discord.TextStyle.paragraph, max_length=900)
     наказание = discord.ui.TextInput(label="Наказание", placeholder="Тайм-аут / Бан", max_length=100)
     длительность = discord.ui.TextInput(label="Длительность", placeholder="1 час / 6ч / 1д", max_length=100)
 
@@ -88,13 +116,66 @@ class RuleModal(discord.ui.Modal, title="Новый пункт правил"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        embed = discord.Embed(title=f"Пункт – {self.номер}", color=discord.Color.red())
-        embed.add_field(name="📋 Описание", value=str(self.описание), inline=False)
-        embed.add_field(name="⚠️ Наказание", value=str(self.наказание), inline=True)
-        embed.add_field(name="⏱️ Длительность", value=str(self.длительность), inline=True)
+        номер = str(self.номер).strip()
+        field_name = f"📌 {номер}"
+        field_value = (
+            f"{self.описание}\n\n"
+            f"⚠️ **Наказание:** {self.наказание}   •   ⏱️ **Длительность:** {self.длительность}"
+        )
+        if len(field_value) > 1024:
+            await interaction.followup.send(
+                "Слишком длинный пункт — описание вместе с наказанием и длительностью "
+                "не помещается в лимит Discord на одно поле (1024 символа). Сократите текст.",
+                ephemeral=True,
+            )
+            return
 
-        await self.channel.send(embed=embed)
-        await interaction.followup.send("Пункт правил отправлен.", ephemeral=True)
+        try:
+            rules_message = await find_rules_message(self.channel, interaction.client.user.id)
+        except discord.HTTPException as e:
+            await interaction.followup.send(f"Не удалось прочитать историю канала: {e}", ephemeral=True)
+            return
+
+        embed = rules_message.embeds[0] if rules_message is not None else discord.Embed(
+            title=RULES_EMBED_TITLE, color=discord.Color.red()
+        )
+
+        fields = {f.name: f.value for f in embed.fields}
+        is_update = field_name in fields
+        fields[field_name] = field_value
+
+        if not is_update and len(fields) > MAX_RULE_FIELDS:
+            await interaction.followup.send(
+                f"В своде правил уже {MAX_RULE_FIELDS} пунктов — это лимит одного сообщения Discord. "
+                "Удалите/объедините старые пункты вручную в самом сообщении.",
+                ephemeral=True,
+            )
+            return
+
+        total_chars = len(RULES_EMBED_TITLE) + sum(len(name) + len(value) for name, value in fields.items())
+        if total_chars > MAX_EMBED_CHARS:
+            await interaction.followup.send(
+                "Свод правил почти достиг лимита Discord на длину сообщения (6000 символов) — "
+                "сократите текст существующих пунктов, чтобы добавить новый.",
+                ephemeral=True,
+            )
+            return
+
+        embed.clear_fields()
+        for name in sorted(fields, key=lambda n: _rule_sort_key(n[len("📌 "):])):
+            embed.add_field(name=name, value=fields[name], inline=False)
+
+        try:
+            if rules_message is not None:
+                await rules_message.edit(embed=embed)
+            else:
+                await self.channel.send(embed=embed)
+        except discord.HTTPException as e:
+            await interaction.followup.send(f"Не удалось сохранить пункт правил: {e}", ephemeral=True)
+            return
+
+        verb = "обновлён" if is_update else "добавлен"
+        await interaction.followup.send(f"Пункт {номер} {verb} в своде правил.", ephemeral=True)
 
 
 class AnnounceBot(commands.Bot):
@@ -133,8 +214,8 @@ async def announce(
     await interaction.response.send_modal(AnnounceModal(target, изображение, color, роль))
 
 
-@bot.tree.command(name="rule", description="Отправить пункт правил", guild=GUILD_OBJECT)
-@app_commands.describe(канал="Куда отправить (по умолчанию — текущий канал)")
+@bot.tree.command(name="rule", description="Добавить/обновить пункт в своде правил канала", guild=GUILD_OBJECT)
+@app_commands.describe(канал="В каком канале свод правил (по умолчанию — текущий канал)")
 async def rule(interaction: discord.Interaction, канал: discord.TextChannel = None):
     if not isinstance(interaction.user, discord.Member) or not has_role(interaction.user, ANNOUNCE_ROLE_ID):
         await interaction.response.send_message("Эта команда доступна только администрации.", ephemeral=True)
