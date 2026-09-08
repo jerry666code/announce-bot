@@ -141,7 +141,7 @@ async def find_rules_message(channel: discord.TextChannel, bot_user_id: int):
 
 
 _RULE_FIELD_VALUE_RE = re.compile(
-    r"^(?P<описание>.*)\n\n⚠️ \*\*Наказание:\*\* (?P<наказание>.*?)   •   ⏱️ \*\*Длительность:\*\* (?P<длительность>.*)$",
+    r"^(?P<описание>.*?)\n\n⚠️ \*\*Наказание:\*\* (?P<наказание>.*?)\n⏱️ \*\*Длительность:\*\* (?P<длительность>.*)$",
     re.DOTALL,
 )
 
@@ -188,7 +188,8 @@ class RuleModal(discord.ui.Modal, title="Пункт правил"):
         field_name = f"📌 {номер}"
         field_value = (
             f"{self.описание}\n\n"
-            f"⚠️ **Наказание:** {self.наказание}   •   ⏱️ **Длительность:** {self.длительность}"
+            f"⚠️ **Наказание:** {self.наказание}\n"
+            f"⏱️ **Длительность:** {self.длительность}"
         )
         if len(field_value) > 1024:
             await interaction.followup.send(
