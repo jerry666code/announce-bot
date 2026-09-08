@@ -1,4 +1,5 @@
 import os
+import re
 
 import discord
 from discord import app_commands
@@ -137,15 +138,43 @@ async def find_rules_message(channel: discord.TextChannel, bot_user_id: int):
     return None
 
 
-class RuleModal(discord.ui.Modal, title="Новый пункт правил"):
+_RULE_FIELD_VALUE_RE = re.compile(
+    r"^(?P<описание>.*)\n\n⚠️ \*\*Наказание:\*\* (?P<наказание>.*?)   •   ⏱️ \*\*Длительность:\*\* (?P<длительность>.*)$",
+    re.DOTALL,
+)
+
+
+def _parse_rule_field_value(value: str):
+    """Разбирает значение поля обратно на описание/наказание/длительность,
+    чтобы предзаполнить ими форму редактирования. Формат жёстко завязан на
+    то, как RuleModal его собирает — при желании поменять оформление пункта
+    поправьте оба места."""
+    m = _RULE_FIELD_VALUE_RE.match(value)
+    if not m:
+        return None
+    return m.group("описание"), m.group("наказание"), m.group("длительность")
+
+
+class RuleModal(discord.ui.Modal, title="Пункт правил"):
     номер = discord.ui.TextInput(label="Номер пункта", placeholder="1.2", max_length=16)
     описание = discord.ui.TextInput(label="Описание", style=discord.TextStyle.paragraph, max_length=900)
     наказание = discord.ui.TextInput(label="Наказание", placeholder="Тайм-аут / Бан", max_length=100)
     длительность = discord.ui.TextInput(label="Длительность", placeholder="1 час / 6ч / 1д", max_length=100)
 
-    def __init__(self, channel):
+    def __init__(self, channel, номер: str = None, prefill: tuple = None):
         super().__init__()
         self.channel = channel
+        # Задан только когда модалку открыли на редактирование существующего
+        # пункта — если в форме поменяют номер, старую запись нужно убрать,
+        # а не оставить рядом с новой.
+        self.original_номер = номер if prefill is not None else None
+        if номер:
+            self.номер.default = номер
+        if prefill:
+            описание, наказание, длительность = prefill
+            self.описание.default = описание
+            self.наказание.default = наказание
+            self.длительность.default = длительность
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -175,6 +204,9 @@ class RuleModal(discord.ui.Modal, title="Новый пункт правил"):
         )
 
         fields = {f.name: f.value for f in embed.fields}
+        if self.original_номер and self.original_номер != номер:
+            fields.pop(f"📌 {self.original_номер}", None)
+
         is_update = field_name in fields
         fields[field_name] = field_value
 
@@ -210,6 +242,43 @@ class RuleModal(discord.ui.Modal, title="Новый пункт правил"):
 
         verb = "обновлён" if is_update else "добавлен"
         await interaction.followup.send(f"Пункт {номер} {verb} в своде правил.", ephemeral=True)
+
+
+class RuleEditSelect(discord.ui.Select):
+    def __init__(self, message: discord.Message):
+        embed = message.embeds[0]
+        options = [
+            discord.SelectOption(label=f.name[len("📌 "):], value=f.name)
+            for f in embed.fields
+        ]
+        super().__init__(placeholder="Какой пункт отредактировать?", options=options)
+        self.message = message
+
+    async def callback(self, interaction: discord.Interaction):
+        embed = self.message.embeds[0]
+        field = next((f for f in embed.fields if f.name == self.values[0]), None)
+        if field is None:
+            await interaction.response.send_message(
+                "Этот пункт уже не найден в своде — возможно, его успели изменить.", ephemeral=True
+            )
+            return
+
+        prefill = _parse_rule_field_value(field.value)
+        if prefill is None:
+            await interaction.response.send_message(
+                "Не удалось разобрать содержимое пункта на составляющие — отредактируйте его вручную через /rule.",
+                ephemeral=True,
+            )
+            return
+
+        номер = self.values[0][len("📌 "):]
+        await interaction.response.send_modal(RuleModal(self.message.channel, номер=номер, prefill=prefill))
+
+
+class RuleEditView(discord.ui.View):
+    def __init__(self, message: discord.Message):
+        super().__init__(timeout=180)
+        self.add_item(RuleEditSelect(message))
 
 
 class AnnounceBot(commands.Bot):
@@ -248,20 +317,22 @@ async def announce(
     await interaction.response.send_modal(AnnounceModal(target, изображение, color, роль))
 
 
-@bot.tree.context_menu(name="Редактировать объявление", guild=GUILD_OBJECT)
-async def edit_announcement(interaction: discord.Interaction, message: discord.Message):
+@bot.tree.context_menu(name="Редактировать", guild=GUILD_OBJECT)
+async def edit_message(interaction: discord.Interaction, message: discord.Message):
     if not isinstance(interaction.user, discord.Member) or not has_role(interaction.user, ANNOUNCE_ROLE_ID):
         await interaction.response.send_message("Эта команда доступна только администрации.", ephemeral=True)
         return
 
     if message.author.id != interaction.client.user.id or not message.embeds:
-        await interaction.response.send_message("Это не объявление, отправленное этим ботом.", ephemeral=True)
+        await interaction.response.send_message("Это не сообщение, отправленное этим ботом.", ephemeral=True)
         return
 
     if message.embeds[0].title == RULES_EMBED_TITLE:
+        if not message.embeds[0].fields:
+            await interaction.response.send_message("В своде правил пока нет ни одного пункта.", ephemeral=True)
+            return
         await interaction.response.send_message(
-            "Это свод правил — чтобы изменить пункт, отправьте /rule с тем же номером ещё раз.",
-            ephemeral=True,
+            "Выберите пункт для редактирования:", view=RuleEditView(message), ephemeral=True
         )
         return
 
