@@ -75,6 +75,40 @@ class AnnounceModal(discord.ui.Modal, title="Новое объявление"):
         await interaction.followup.send("Объявление отправлено.", ephemeral=True)
 
 
+class AnnounceEditModal(discord.ui.Modal, title="Редактировать объявление"):
+    заголовок = discord.ui.TextInput(label="Заголовок", max_length=256)
+    текст = discord.ui.TextInput(
+        label="Текст",
+        style=discord.TextStyle.paragraph,
+        max_length=4000,
+        placeholder="Часть текста можно скрыть спойлером: ||скрытый текст||",
+    )
+
+    def __init__(self, message: discord.Message):
+        super().__init__()
+        self.message = message
+        embed = message.embeds[0]
+        self.заголовок.default = embed.title or ""
+        self.текст.default = embed.description or ""
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # Меняем только заголовок/текст — цвет, картинку и упоминание роли
+        # эмбед уже несёт в себе, модалка Discord не даёт редактировать вложения.
+        embed = self.message.embeds[0]
+        embed.title = str(self.заголовок)
+        embed.description = str(self.текст)
+
+        try:
+            await self.message.edit(embed=embed)
+        except discord.HTTPException as e:
+            await interaction.followup.send(f"Не удалось отредактировать сообщение: {e}", ephemeral=True)
+            return
+
+        await interaction.followup.send("Объявление обновлено.", ephemeral=True)
+
+
 RULES_EMBED_TITLE = "📋 Правила сервера"
 # Лимиты эмбеда Discord: не больше 25 полей и не больше 6000 символов суммарно
 # (заголовок + все name/value полей) — оставляем небольшой запас на заголовок.
@@ -212,6 +246,26 @@ async def announce(
     target = канал or interaction.channel
     color = COLOR_CHOICES[цвет.value] if цвет is not None else discord.Color.blurple()
     await interaction.response.send_modal(AnnounceModal(target, изображение, color, роль))
+
+
+@bot.tree.context_menu(name="Редактировать объявление", guild=GUILD_OBJECT)
+async def edit_announcement(interaction: discord.Interaction, message: discord.Message):
+    if not isinstance(interaction.user, discord.Member) or not has_role(interaction.user, ANNOUNCE_ROLE_ID):
+        await interaction.response.send_message("Эта команда доступна только администрации.", ephemeral=True)
+        return
+
+    if message.author.id != interaction.client.user.id or not message.embeds:
+        await interaction.response.send_message("Это не объявление, отправленное этим ботом.", ephemeral=True)
+        return
+
+    if message.embeds[0].title == RULES_EMBED_TITLE:
+        await interaction.response.send_message(
+            "Это свод правил — чтобы изменить пункт, отправьте /rule с тем же номером ещё раз.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_modal(AnnounceEditModal(message))
 
 
 @bot.tree.command(name="rule", description="Добавить/обновить пункт в своде правил канала", guild=GUILD_OBJECT)
