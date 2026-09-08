@@ -117,16 +117,18 @@ MAX_RULE_FIELDS = 25
 MAX_EMBED_CHARS = 5900
 
 
+_LEADING_NUMBER_RE = re.compile(r"^(\d+(?:\.\d+)*)")
+
+
 def _rule_sort_key(номер: str):
-    """"1.2" -> (1, 2), чтобы пункты в своде шли по номеру, а не по порядку
-    добавления; нечисловые номера уходят в конец списка."""
-    parts = []
-    for piece in номер.split("."):
-        try:
-            parts.append(int(piece))
-        except ValueError:
-            return (float("inf"), номер)
-    return tuple(parts) if parts else (float("inf"), номер)
+    """Сортируем по ведущему числу в номере: "1.2 – Оскорбления" -> (1, 2), а
+    не по всей строке целиком — иначе с текстом после номера порядок ломается.
+    Номера совсем без ведущего числа уходят в конец списка."""
+    m = _LEADING_NUMBER_RE.match(номер.strip())
+    if not m:
+        return (1, номер)
+    parts = tuple(int(p) for p in m.group(1).split("."))
+    return (0, parts, номер)
 
 
 async def find_rules_message(channel: discord.TextChannel, bot_user_id: int):
@@ -156,7 +158,10 @@ def _parse_rule_field_value(value: str):
 
 
 class RuleModal(discord.ui.Modal, title="Пункт правил"):
-    номер = discord.ui.TextInput(label="Номер пункта", placeholder="1.2", max_length=16)
+    # 90, не 100 — оставляем запас на "📌 " в имени поля эмбеда и на то, что
+    # номер и так же идёт как label/value SelectOption'а в /rule-редакторе,
+    # у которых у самих жёсткий лимит Discord в 100 символов.
+    номер = discord.ui.TextInput(label="Номер пункта", placeholder="1.2 – Оскорбления", max_length=90)
     описание = discord.ui.TextInput(label="Описание", style=discord.TextStyle.paragraph, max_length=900)
     наказание = discord.ui.TextInput(label="Наказание", placeholder="Тайм-аут / Бан", max_length=100)
     длительность = discord.ui.TextInput(label="Длительность", placeholder="1 час / 6ч / 1д", max_length=100)
@@ -247,16 +252,21 @@ class RuleModal(discord.ui.Modal, title="Пункт правил"):
 class RuleEditSelect(discord.ui.Select):
     def __init__(self, message: discord.Message):
         embed = message.embeds[0]
+        # Value/label — сам номер (без "📌 "): у SelectOption лимит Discord в
+        # 100 символов и на label, и на value, а "📌 " в имени поля эмбеда его
+        # уже не учитывает.
         options = [
-            discord.SelectOption(label=f.name[len("📌 "):], value=f.name)
+            discord.SelectOption(label=f.name[len("📌 "):], value=f.name[len("📌 "):])
             for f in embed.fields
         ]
         super().__init__(placeholder="Какой пункт отредактировать?", options=options)
         self.message = message
 
     async def callback(self, interaction: discord.Interaction):
+        номер = self.values[0]
+        field_name = f"📌 {номер}"
         embed = self.message.embeds[0]
-        field = next((f for f in embed.fields if f.name == self.values[0]), None)
+        field = next((f for f in embed.fields if f.name == field_name), None)
         if field is None:
             await interaction.response.send_message(
                 "Этот пункт уже не найден в своде — возможно, его успели изменить.", ephemeral=True
@@ -271,7 +281,6 @@ class RuleEditSelect(discord.ui.Select):
             )
             return
 
-        номер = self.values[0][len("📌 "):]
         await interaction.response.send_modal(RuleModal(self.message.channel, номер=номер, prefill=prefill))
 
 
